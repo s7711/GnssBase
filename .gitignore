@@ -1,0 +1,12 @@
+# Site-specific: holds the base position (Ben's house) and caster logins - never commit
+config.yaml
+
+# Logs and recorded receiver data contain the base position
+data/
+logs/
+*.log
+*.ubx
+
+venv/
+__pycache__/
+.pytest_cache/
