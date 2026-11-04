@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en" data-bs-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}GnssBase{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link href="/static/vendor/bootstrap-5.3.3/bootstrap.min.css" rel="stylesheet">
+  <script>
+    // Bootstrap 5.3 has no "auto" theme of its own - follow the OS.
+    (function () {
+      const dark = window.matchMedia("(prefers-color-scheme: dark)");
+      const apply = () => document.documentElement.setAttribute("data-bs-theme", dark.matches ? "dark" : "light");
+      apply();
+      dark.addEventListener("change", apply);
+    })();
+  </script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav class="navbar navbar-expand navbar-dark bg-dark sticky-top mb-3">
+    <div class="container-fluid flex-wrap row-gap-1">
+      <a class="navbar-brand" href="{{ manager_url }}">GnssBase</a>
+      <div class="navbar-nav">
+        {% block navlinks %}
+        {% if pages|default([]) %}
+        <div class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+            {{ current_title|default('Pages') }}
+          </a>
+          <ul class="dropdown-menu dropdown-menu-dark">
+            {% for slug, title in pages %}
+            <li>
+              <a class="dropdown-item {{ 'active' if slug == current_slug else '' }}"
+                 href="{{ '/' if slug == index_slug else '/pages/' + slug }}">{{ title }}</a>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% endblock %}
+      </div>
+      <div class="navbar-nav ms-auto flex-row flex-wrap gap-1 align-items-center">
+        {% block statusbadges %}
+        <span id="sys-mode" class="badge text-bg-secondary" title="Base mode">&mdash;</span>
+        <span id="sys-wifi" class="badge text-bg-secondary" title="Wifi signal">Wifi</span>
+        <span id="sys-cpu" class="badge text-bg-secondary" title="CPU load">CPU &mdash;</span>
+        <span id="sys-power" class="badge text-bg-secondary" title="vcgencmd get_throttled">Pwr</span>
+        {% endblock %}
+      </div>
+    </div>
+  </nav>
+  <div class="container-fluid">
+    {% block content %}{% endblock %}
+  </div>
+  <script src="/static/vendor/bootstrap-5.3.3/bootstrap.bundle.min.js"></script>
+  <script src="/static/ws-utils.js"></script>
+  <script>
+    const MANAGER_URL = "{{ manager_url }}";
+    // Cross-port, straight from base's own websocket - see sysstatus.js.
+    const BASE_WS_URL = "{{ base_ws_url|default('') }}";
+  </script>
+  <script src="/static/sysstatus.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

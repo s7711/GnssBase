@@ -1,0 +1,37 @@
+{# title: Positions #}
+{% extends "base.html" %}
+{% block title %}GnssBase — Positions{% endblock %}
+{% block content %}
+<p class="text-body-secondary">
+  Every base position saved from Locate, newest first. The one in use has no "Replaced" date.
+  Survey-in results are never saved here.
+</p>
+{% if not history %}
+<p>None yet.</p>
+{% else %}
+<div class="table-responsive">
+<table class="table table-sm align-middle" style="font-variant-numeric: tabular-nums">
+  <thead>
+    <tr>
+      <th>Saved</th><th>Replaced</th><th>ECEF X / Y / Z (m)</th><th>SD E / N / U (mm)</th>
+      <th>Epochs used</th><th>Fixed / total epochs</th><th>Duration</th><th>Corrections</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in history %}
+    <tr class="{{ '' if p.replaced_at else 'table-success' }}">
+      <td>{{ p.saved_at }}</td>
+      <td>{{ p.replaced_at or 'in use' }}</td>
+      <td>{% for v in p.ecef_m %}{{ '%.4f' % v }}<br>{% endfor %}</td>
+      <td>{% for v in p.sd_enu_m or [] %}{{ '%.1f' % (v * 1000) }}{{ ' / ' if not loop.last }}{% endfor %}</td>
+      <td>{% if p.peak_epochs %}{{ p.peak_epochs }} (peak){% else %}all fixed{% endif %}</td>
+      <td>{{ p.epochs_fixed }} / {{ p.epochs_fixed + p.epochs_not_fixed }}</td>
+      <td>{% if p.duration_s >= 7200 %}{{ '%.1f' % (p.duration_s / 3600) }} h{% else %}{{ (p.duration_s // 60) | int }} min{% endif %}</td>
+      <td>{{ p.corrections }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

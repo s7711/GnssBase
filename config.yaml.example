@@ -1,0 +1,61 @@
+# Shared runtime config for GnssBase - the single source of truth for each
+# service's systemd unit, web port, and settings. See gnssbase-prd.md.
+#
+# Copy this file to config.yaml and fill in real values. config.yaml is
+# gitignored: it holds the caster logins. The base position itself isn't
+# here - the base app keeps it (and its history, and the last mode) in
+# base/data/state.yaml, also gitignored.
+#
+# Services read this at startup only: restart a service after editing.
+
+services:
+  manager:
+    unit: gnssbase-manager.service
+    host: 0.0.0.0
+    port: 8000
+    web_ui: true
+
+  base:
+    unit: gnssbase-base.service
+    host: 0.0.0.0
+    port: 8001
+    web_ui: true
+    serial_port: /dev/ttyACM0       # the simpleRTK2B's "POWER+GPS" USB (1546:01a9)
+    data_dir: base/data             # state.yaml (position, history, mode) and the NTRIP backoff state
+    feed_socket: /tmp/gnssbase-base-feed.sock  # parsed status, for a later logger etc. - see shared/feed_server.py
+    feed_hz: 1
+
+    # Locate mode: NTRIP client for the corrections whose frame the base
+    # position must be in (OXTS1 - the same corrections GR6 uses now).
+    ntrip_client:
+      host: caster.example.com
+      port: 2101
+      mountpoint: MOUNTPOINT
+      user: USER
+      password: PASSWORD
+      gga_interval_s: 10            # the F9P's own GGA, forwarded to the caster
+      backoff_initial_s: 30         # minimum wait before any reconnect
+      backoff_max_s: 960            # doubling up to this
+      stable_s: 120                 # a connection that delivered data this long resets the backoff
+
+    locate:
+      min_fixed_epochs: 60          # "Use this position" is refused before this many RTK-fixed epochs
+
+    # Survey-in: bench tests only, never saved as the base position.
+    survey_in:
+      min_duration_s: 300
+      accuracy_limit_m: 2.0
+
+    # Base mode: RTCM 3 out. MSM4 (1074/1084/1094/1124) is every epoch (1 Hz).
+    rtcm:
+      rate_1005: 10                 # epochs between antenna-position messages
+      rate_1230: 10                 # epochs between GLONASS code-phase biases
+
+    # NTRIP caster, serving the RTCM in Survey-in and Base modes.
+    caster:
+      port: 2101
+      mountpoint: GNSSBASE
+      user: ""                      # empty: any login (or none) is accepted
+      password: ""
+      client_queue_len: 100         # RTCM messages (~15 s at 1 Hz) before a slow client is dropped
+      max_clients: 10

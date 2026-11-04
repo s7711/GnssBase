@@ -1,0 +1,16 @@
+[Unit]
+Description=GnssBase base (F9P, NTRIP caster and client)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/GnssBase
+ExecStart=/home/pi/GnssBase/venv/bin/python3 base/app.py
+# Comes back by itself after a power cut or crash, in the last mode used.
+# The NTRIP client keeps its own backoff on disk, so restarts can't hammer the caster.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

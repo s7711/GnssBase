@@ -1,5 +1,6 @@
 # Site-specific: holds the base position (Ben's house) and caster logins - never commit
 config.yaml
+manager/config-backup/
 
 # Logs and recorded receiver data contain the base position
 data/
@@ -10,3 +11,7 @@ logs/
 venv/
 __pycache__/
 .pytest_cache/
+
+# Vendor CAD (large, not ours)
+*.STEP
+*.step

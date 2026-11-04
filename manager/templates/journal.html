@@ -1,0 +1,22 @@
+{% extends "manager-base.html" %}
+{% block title %}GnssBase Manager — {{ name }} journal{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h5 class="mb-0">{{ name }} <small class="text-body-secondary"><code>{{ unit }}</code></small></h5>
+  <div>
+    <button id="refresh" class="btn btn-sm btn-outline-secondary">Refresh</button>
+    <a href="/services" class="btn btn-sm btn-outline-secondary">Back to Services</a>
+  </div>
+</div>
+<pre id="journal-text" class="bg-body-tertiary p-2 rounded small" style="max-height: 75vh; overflow-y: auto; white-space: pre-wrap;">{{ text }}</pre>
+<p class="text-body-secondary small">
+  Last {{ text.splitlines() | length }} lines from <code>journalctl -u {{ unit }}</code>.
+  This is a live systemd journal — it isn't cleared from here; systemd manages its own
+  retention/rotation in the background.
+</p>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById("refresh").addEventListener("click", () => location.reload());
+</script>
+{% endblock %}

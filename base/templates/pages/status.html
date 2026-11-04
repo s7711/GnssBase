@@ -1,0 +1,393 @@
+{# title: Status #}
+{% extends "base.html" %}
+{% block title %}GnssBase — Status{% endblock %}
+{% block head %}
+<style>
+  .stat-label { font-size: .8rem; color: var(--bs-secondary-color); }
+  .stat-value { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  .cno-bars { display: flex; align-items: flex-end; gap: 1px; height: 130px; }
+  .cno-bar { flex: 1 1 0; min-width: 0; max-width: 18px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+  .cno-bar .bar { width: 100%; border-radius: 2px 2px 0 0; }
+  .cno-bar .lbl { font-size: .6rem; font-family: var(--bs-font-monospace); height: 3.2ch; writing-mode: vertical-rl; transform: rotate(180deg); margin-top: 2px; color: var(--bs-secondary-color); }
+  .card { height: 100%; }
+</style>
+{% endblock %}
+{% block content %}
+<div id="errors"></div>
+
+<div class="row g-3 mb-3">
+  <!-- Mode -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Mode</span><span id="mode-badge" class="badge text-bg-secondary fs-6">—</span>
+      </div>
+      <div class="card-body">
+        <div id="survey-warning" class="alert alert-warning py-2" hidden>
+          <strong>Survey-in is for bench tests only.</strong> Its position comes from the receiver's own
+          standalone fix, not the OXTS1 frame, and is never saved as the base position.
+        </div>
+        <div class="mb-2" id="receiver-view">—</div>
+        <div class="btn-group flex-wrap" role="group">
+          <button class="btn btn-outline-info" data-mode="locate">Locate</button>
+          <button class="btn btn-outline-warning" data-mode="survey">Survey-in (bench)</button>
+          <button class="btn btn-outline-success" data-mode="base" id="btn-base">Base</button>
+        </div>
+        <div id="mode-msg" class="small mt-2 text-danger"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Locate -->
+  <div class="col-12 col-lg-6 col-xxl-4" id="locate-card">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Locate: average of RTK-fixed epochs</span><a href="/pages/analysis">Analysis</a>
+      </div>
+      <div class="card-body">
+        <div class="row text-center mb-2">
+          <div class="col"><div class="stat-label">Fixed epochs</div><div class="stat-value" id="loc-fixed">—</div></div>
+          <div class="col"><div class="stat-label">Not fixed</div><div class="stat-value" id="loc-notfixed">—</div></div>
+          <div class="col"><div class="stat-label">Elapsed</div><div class="stat-value" id="loc-elapsed">—</div></div>
+        </div>
+        <div class="progress mb-1" style="height: 8px" title="Time fixed vs not fixed">
+          <div class="progress-bar bg-success" id="loc-bar-fixed" style="width: 0%"></div>
+          <div class="progress-bar bg-secondary" id="loc-bar-notfixed" style="width: 0%"></div>
+        </div>
+        <div class="small text-body-secondary mb-2" id="loc-fixed-pct">—</div>
+        <table class="table table-sm num mb-2">
+          <thead><tr><th>SD (mm)</th><th>E / X</th><th>N / Y</th><th>U / Z</th></tr></thead>
+          <tbody>
+            <tr><td>ENU</td><td id="loc-sd-e">—</td><td id="loc-sd-n">—</td><td id="loc-sd-u">—</td></tr>
+            <tr><td>ECEF</td><td id="loc-sd-x">—</td><td id="loc-sd-y">—</td><td id="loc-sd-z">—</td></tr>
+          </tbody>
+        </table>
+        <div class="small text-body-secondary mb-3">
+          Scatter of all 1 Hz fixed epochs since the last reset, wrong fixes included - the
+          Analysis page separates them. Mean pAcc <span id="loc-pacc" class="num">—</span>.
+          <span id="loc-loading" class="text-warning" hidden>Loading the saved data set…</span>
+        </div>
+        <a class="btn btn-primary" href="/pages/analysis">Analyse and choose a position</a>
+        <button class="btn btn-outline-secondary" id="btn-reset">Reset average</button>
+        <div id="locate-msg" class="small mt-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Survey-in -->
+  <div class="col-12 col-lg-6 col-xxl-4" id="survey-card" hidden>
+    <div class="card border-warning">
+      <div class="card-header">Survey-in (bench test)</div>
+      <div class="card-body">
+        <div class="row text-center">
+          <div class="col"><div class="stat-label">Duration</div><div class="stat-value" id="svin-dur">—</div></div>
+          <div class="col"><div class="stat-label">Mean accuracy</div><div class="stat-value" id="svin-acc">—</div></div>
+          <div class="col"><div class="stat-label">State</div><div class="stat-value" id="svin-state">—</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Corrections -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header">Corrections</div>
+      <div class="card-body" id="corrections-locate">
+        <div class="mb-2">NTRIP client <span id="ntrip-state" class="badge text-bg-secondary">—</span>
+          <span class="small text-body-secondary" id="ntrip-caster"></span></div>
+        <div class="small text-danger mb-2" id="ntrip-error"></div>
+        <table class="table table-sm num mb-2">
+          <tbody>
+            <tr><td>Connected for</td><td id="ntrip-connected">—</td></tr>
+            <tr><td>Bytes received</td><td id="ntrip-bytes">—</td></tr>
+            <tr><td>GGA sent to caster</td><td id="ntrip-gga">—</td></tr>
+            <tr><td>Last data</td><td id="ntrip-age">—</td></tr>
+            <tr><td>Receiver's correction age</td><td id="ntrip-corrage">—</td></tr>
+          </tbody>
+        </table>
+        <table class="table table-sm num mb-0">
+          <thead><tr><th>RTCM in</th><th>Count</th><th>Rate (Hz)</th></tr></thead>
+          <tbody id="rtcm-in"></tbody>
+        </table>
+      </div>
+      <div class="card-body" id="corrections-base" hidden>
+        <div class="mb-2 small">Caster on port <span id="caster-port" class="num">—</span>,
+          mountpoint <code id="caster-mount">—</code>, <span id="caster-auth">—</span></div>
+        <table class="table table-sm num mb-3">
+          <thead><tr><th>RTCM out</th><th>Count</th><th>Rate (Hz)</th><th>Bytes</th></tr></thead>
+          <tbody id="rtcm-out"></tbody>
+        </table>
+        <table class="table table-sm num mb-0">
+          <thead><tr><th>Client</th><th>Since</th><th>Sent</th><th>Agent</th></tr></thead>
+          <tbody id="clients"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Satellites -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between">
+        <span>Satellites</span><span class="small num" id="sat-total">—</span>
+      </div>
+      <div class="card-body">
+        <table class="table table-sm num mb-2">
+          <thead><tr><th>Constellation</th><th>Tracked</th><th>Used</th></tr></thead>
+          <tbody id="sat-summary"></tbody>
+        </table>
+        <div class="small text-body-secondary mb-1">C/N0 (dBHz, 0–55) — green: used in the solution. G GPS, R GLONASS, E Galileo, C BeiDou, J QZSS, S SBAS (PRN − 100)</div>
+        <div class="cno-bars" id="cno-bars"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Receiver -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header">Receiver</div>
+      <div class="card-body">
+        <table class="table table-sm num mb-2">
+          <thead><tr><th>RF</th><th>Antenna</th><th>Power</th><th title="MON-RF jamInd, 0-255 (HPG doesn't report a jamming state)">Jam ind.</th><th>AGC</th></tr></thead>
+          <tbody id="rf"></tbody>
+        </table>
+        <table class="table table-sm num mb-0">
+          <tbody>
+            <tr><td>Firmware</td><td id="rx-fw">—</td></tr>
+            <tr><td>Port</td><td id="rx-port">—</td></tr>
+            <tr><td>Configured</td><td id="rx-config">—</td></tr>
+            <tr><td>TMODE readback</td><td id="rx-tmode">—</td></tr>
+            <tr><td>Bytes in / skipped</td><td id="rx-bytes">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Base position -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between">
+        <span>Base position</span><a href="/pages/positions" class="small">History</a>
+      </div>
+      <div class="card-body" id="position">—</div>
+    </div>
+  </div>
+
+  <!-- Pi -->
+  <div class="col-12 col-lg-6 col-xxl-4">
+    <div class="card">
+      <div class="card-header">Pi</div>
+      <div class="card-body">
+        <table class="table table-sm num mb-0">
+          <tbody>
+            <tr><td>CPU temperature</td><td id="pi-temp">—</td></tr>
+            <tr><td>CPU load</td><td id="pi-cpu">—</td></tr>
+            <tr><td>get_throttled</td><td id="pi-throttled">—</td></tr>
+            <tr><td>Wifi</td><td id="pi-wifi">—</td></tr>
+            <tr><td>Uptime</td><td id="pi-uptime">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const dash = "—";
+const mm = (m) => m === null || m === undefined ? dash : (m * 1000).toFixed(1);
+const metres = (m, dp = 3) => m === null || m === undefined ? dash : `${m.toFixed(dp)} m`;
+
+function duration(s) {
+  if (s === null || s === undefined) return dash;
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(sec).padStart(2, "0")}s` : `${sec}s`;
+}
+function bytes(n) {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(1)} kB` : `${n} B`;
+}
+function badge(text, cls) { return `<span class="badge text-bg-${cls}">${esc(text)}</span>`; }
+
+const RINEX = {GPS: "G", GLONASS: "R", Galileo: "E", BeiDou: "C", QZSS: "J", SBAS: "S", NavIC: "I"};
+// RINEX-style id, always three characters: R03, G21. UBX gives SBAS as its PRN (120-158), RINEX as PRN - 100.
+function satId(gnss, sv) {
+  return (RINEX[gnss] || "?") + String(gnss === "SBAS" && sv >= 100 ? sv - 100 : sv).padStart(2, "0");
+}
+let latest = null;
+
+function render(s) {
+  latest = s;
+  // Errors
+  $("errors").innerHTML = Object.entries(s.errors || {}).map(([k, v]) =>
+    `<div class="alert alert-danger py-2 mb-2"><strong>${esc(k)}:</strong> ${esc(v)}</div>`).join("");
+
+  // Mode
+  const mb = $("mode-badge");
+  mb.textContent = s.mode_label;
+  mb.className = "badge fs-6 " + modeBadgeClass(s.mode);
+  // The current mode's button is solid, the others outlined.
+  const BTN = {locate: "info", survey: "warning", base: "success"};
+  document.querySelectorAll("button[data-mode]").forEach(b => {
+    const style = BTN[b.dataset.mode], on = b.dataset.mode === s.mode;
+    b.classList.toggle(`btn-${style}`, on);
+    b.classList.toggle(`btn-outline-${style}`, !on);
+  });
+  $("btn-base").disabled = !s.position;
+  $("btn-base").title = s.position ? "" : "No base position stored yet - run Locate first";
+  $("survey-warning").hidden = s.mode !== "survey";
+
+  const rx = s.receiver, pvt = rx.pvt;
+  let view = "";
+  if (pvt) {
+    const carr = pvt.carr_soln === 2 ? badge("RTK fixed", "success") : pvt.carr_soln === 1 ? badge("RTK float", "warning") : badge("No RTK", "secondary");
+    view = `Fix <strong>${esc(pvt.fix_type_name)}</strong> ${s.mode === "locate" ? carr : ""} · ${pvt.num_sv} SVs`;
+    if (pvt.fix_type !== 5) view += ` · hAcc ${metres(pvt.h_acc_m)} · vAcc ${metres(pvt.v_acc_m)}`;
+  }
+  if (s.mode !== "locate" && rx.tmode && rx.tmode.mode_name) {
+    view += `<br>Receiver TMODE: <strong>${esc(rx.tmode.mode_name)}</strong>`;
+    if (s.mode === "base" && rx.tmode.ecef_m && s.position) {
+      const d = Math.hypot(...rx.tmode.ecef_m.map((v, i) => v - s.position.ecef_m[i]));
+      view += d < 0.0005 ? " " + badge("at stored position", "success") : " " + badge(`${(d * 1000).toFixed(1)} mm from stored position`, "danger");
+    }
+  }
+  $("receiver-view").innerHTML = view || dash;
+
+  // Locate / survey cards
+  $("locate-card").hidden = s.mode !== "locate";
+  $("survey-card").hidden = s.mode !== "survey";
+  const a = s.locate.average;
+  $("loc-fixed").textContent = a.epochs_fixed;
+  $("loc-notfixed").textContent = a.epochs_not_fixed;
+  $("loc-elapsed").textContent = duration(a.elapsed_s);
+  const total = a.epochs_fixed + a.epochs_not_fixed;
+  $("loc-bar-fixed").style.width = total ? `${100 * a.epochs_fixed / total}%` : "0%";
+  $("loc-bar-notfixed").style.width = total ? `${100 * a.epochs_not_fixed / total}%` : "0%";
+  $("loc-fixed-pct").textContent = total ? `Fixed ${duration(a.epochs_fixed)} of ${duration(total)} (${(100 * a.epochs_fixed / total).toFixed(0)}%)` : "No epochs yet";
+  const enu = a.sd_enu_m || [null, null, null], ecef = a.sd_ecef_m || [null, null, null];
+  ["e", "n", "u"].forEach((k, i) => $(`loc-sd-${k}`).textContent = mm(enu[i]));
+  ["x", "y", "z"].forEach((k, i) => $(`loc-sd-${k}`).textContent = mm(ecef[i]));
+  $("loc-pacc").textContent = a.mean_pacc_m === null ? dash : `${mm(a.mean_pacc_m)} mm`;
+  $("loc-loading").hidden = !a.loading;
+
+  const sv = rx.svin;
+  $("svin-dur").textContent = sv ? duration(sv.duration_s) : dash;
+  $("svin-acc").textContent = sv ? metres(sv.mean_acc_m) : dash;
+  $("svin-state").innerHTML = !sv ? dash : sv.valid ? badge("Done", "success") : sv.active ? badge("Running", "warning") : badge("Idle", "secondary");
+
+  // Corrections
+  const locate = s.mode === "locate";
+  $("corrections-locate").hidden = !locate;
+  $("corrections-base").hidden = locate;
+  const n = s.locate.ntrip;
+  const nState = $("ntrip-state");
+  nState.textContent = n.state + (n.retry_in_s !== null ? ` (retry in ${duration(n.retry_in_s)})` : "");
+  nState.className = "badge text-bg-" + ({connected: "success", connecting: "info", waiting: "warning"}[n.state] || "secondary");
+  $("ntrip-caster").textContent = n.caster;
+  $("ntrip-error").textContent = n.last_error || "";
+  $("ntrip-connected").textContent = duration(n.connected_for_s);
+  $("ntrip-bytes").textContent = bytes(n.bytes_received);
+  $("ntrip-gga").textContent = n.gga_sent;
+  $("ntrip-age").textContent = n.data_age_s === null ? dash : `${n.data_age_s.toFixed(1)} s ago`;
+  $("ntrip-corrage").textContent = (pvt && pvt.correction_age) || dash;
+  $("rtcm-in").innerHTML = s.locate.rtcm_in.map(r =>
+    `<tr><td>${r.type}</td><td>${r.count}</td><td>${r.rate_hz.toFixed(2)}</td></tr>`).join("");
+
+  const c = s.base.caster;
+  $("caster-port").textContent = c.port;
+  $("caster-mount").textContent = c.mountpoint;
+  $("caster-auth").textContent = c.auth ? "login required" : "any login accepted";
+  $("rtcm-out").innerHTML = s.base.rtcm_out.map(r =>
+    `<tr><td>${r.type}</td><td>${r.count}</td><td>${r.rate_hz.toFixed(2)}</td><td>${bytes(r.bytes)}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="text-body-secondary">None yet</td></tr>`;
+  $("clients").innerHTML = c.clients.map(cl =>
+    `<tr><td>${esc(cl.ip)}</td><td>${duration(cl.connected_for_s)}</td><td>${bytes(cl.bytes_sent)}</td><td class="small">${esc(cl.user_agent)} (${cl.ntrip})</td></tr>`).join("")
+    || `<tr><td colspan="4" class="text-body-secondary">No clients connected</td></tr>`;
+
+  // Satellites
+  const sats = rx.sats;
+  $("sat-total").textContent = sats ? `${sats.used} used / ${sats.tracked} tracked` : dash;
+  $("sat-summary").innerHTML = sats ? sats.summary.map(g =>
+    `<tr><td>${esc(g.gnss)}</td><td>${g.tracked}</td><td>${g.used}</td></tr>`).join("") : "";
+  $("cno-bars").innerHTML = sats ? sats.sats.filter(x => x.cno > 0).map(x =>
+    `<div class="cno-bar" title="${esc(x.gnss)} ${x.sv}: ${x.cno} dBHz, elev ${x.elev}°">
+       <div class="bar ${x.used ? "bg-success" : "bg-secondary"}" style="height:${Math.min(100, x.cno / 55 * 100)}px"></div>
+       <div class="lbl">${satId(x.gnss, x.sv)}</div></div>`).join("") : "";
+
+  // Receiver
+  $("rf").innerHTML = (rx.rf || []).map(b =>
+    `<tr><td>${esc(b.block)}</td>
+     <td>${badge(b.ant_status, b.ant_status === "OK" ? "success" : (b.ant_status === "Short" || b.ant_status === "Open") ? "danger" : "secondary")}</td>
+     <td>${esc(b.ant_power)}</td>
+     <td>${b.jam_ind}</td>
+     <td>${b.agc_percent.toFixed(0)}% <span class="small text-body-secondary">(${b.agc_cnt})</span></td></tr>`).join("");
+  const ver = rx.version;
+  $("rx-fw").textContent = ver ? `${ver.fw || ver.sw} (${ver.module || "?"}, protocol ${ver.protver || "?"})` : dash;
+  $("rx-port").innerHTML = `${esc(rx.port)} ${rx.connected ? badge("connected", "success") : badge("not connected", "danger")}`;
+  const cfg = s.config;
+  $("rx-config").innerHTML = !cfg ? dash : `${esc(cfg.mode)}, ${cfg.keys} keys, ${duration(cfg.age_s)} ago ` +
+    (cfg.errors.length ? badge(`${cfg.errors.length} errors`, "danger") : badge("all ACKed", "success"));
+  $("rx-tmode").textContent = rx.tmode && rx.tmode.mode_name ? rx.tmode.mode_name : dash;
+  $("rx-bytes").textContent = `${bytes(rx.bytes_in)} / ${rx.discarded_bytes}`;
+
+  // Base position
+  const p = s.position;
+  $("position").innerHTML = !p ? `<span class="text-body-secondary">None stored yet. Run Locate, then "Use this position".</span>` :
+    `<table class="table table-sm num mb-0"><tbody>
+      <tr><td>ECEF X / Y / Z</td><td>${p.ecef_m.map(v => v.toFixed(4)).join("<br>")}</td></tr>
+      <tr><td>Saved</td><td>${esc(p.saved_at)}</td></tr>
+      <tr><td>SD E / N / U</td><td>${p.sd_enu_m.map(mm).join(" / ")} mm</td></tr>
+      <tr><td>Fixed epochs</td><td>${p.epochs_fixed} of ${p.epochs_fixed + p.epochs_not_fixed} (${duration(p.duration_s)})</td></tr>
+      <tr><td>Corrections</td><td>${esc(p.corrections || dash)}</td></tr>
+    </tbody></table>`;
+}
+
+connectWs("/ws/status", render);
+
+// Pi stats come from the manager's single reader (see shared/sysstats.py).
+connectWsUrl(MANAGER_URL.replace(/^http/, "ws") + "ws/system", (m) => {
+  $("pi-temp").textContent = m.temp_c === null ? dash : `${m.temp_c.toFixed(1)} °C`;
+  $("pi-cpu").textContent = m.cpu_percent === null ? dash : `${m.cpu_percent.toFixed(0)}%`;
+  $("pi-throttled").innerHTML = m.throttled === null ? dash :
+    `0x${m.throttled.toString(16)} ` + (m.throttled === 0 ? badge("OK", "success") : (m.throttled & 1) ? badge("under-voltage now", "danger") : badge("has throttled since boot", "warning"));
+  $("pi-wifi").textContent = m.wifi.level_dbm === null ? dash : `${m.wifi.level_dbm} dBm`;
+  $("pi-uptime").textContent = duration(m.uptime_s);
+});
+
+async function post(url, body) {
+  const resp = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  return resp.json();
+}
+
+document.querySelectorAll("button[data-mode]").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const r = await post("/api/mode", {mode: btn.dataset.mode});
+    $("mode-msg").textContent = r.ok ? "" : r.error;
+  });
+});
+
+// Two-step confirm, built into the button (no browser dialogs): a reset can throw away days of data.
+let resetArmed = null;
+$("btn-reset").addEventListener("click", async () => {
+  const btn = $("btn-reset");
+  if (!resetArmed) {
+    btn.textContent = "Confirm: discard this data set?";
+    btn.classList.replace("btn-outline-secondary", "btn-danger");
+    resetArmed = setTimeout(() => { resetArmed = null; btn.textContent = "Reset average"; btn.classList.replace("btn-danger", "btn-outline-secondary"); }, 5000);
+    return;
+  }
+  clearTimeout(resetArmed);
+  resetArmed = null;
+  btn.textContent = "Reset average";
+  btn.classList.replace("btn-danger", "btn-outline-secondary");
+  const r = await post("/api/locate/reset");
+  $("locate-msg").className = "small mt-2 " + (r.ok ? "text-success" : "text-danger");
+  $("locate-msg").textContent = r.ok ? "Started a new data set (the previous one is kept as a backup)." : r.error;
+});
+</script>
+{% endblock %}

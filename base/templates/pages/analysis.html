@@ -1,0 +1,450 @@
+{# title: Analysis #}
+{% extends "base.html" %}
+{% block title %}GnssBase — Locate analysis{% endblock %}
+{% block head %}
+<style>
+  .viz { --series: #2a78d6; --band: rgba(42, 120, 214, .22); --marker: #0b0b0b; }
+  [data-bs-theme="dark"] .viz { --series: #3987e5; --band: rgba(57, 135, 229, .30); --marker: #f0efec; }
+  .num { font-variant-numeric: tabular-nums; }
+  .viz canvas { width: 100%; display: block; touch-action: pan-y; }
+  .viz .panel-title { font-size: .85rem; color: var(--bs-secondary-color); }
+  .viz-tip { position: fixed; pointer-events: none; z-index: 1080; font-size: .8rem; padding: .25rem .5rem;
+             border-radius: .375rem; background: var(--bs-body-bg); color: var(--bs-body-color);
+             border: 1px solid var(--bs-border-color); box-shadow: 0 2px 8px rgba(0,0,0,.15); white-space: nowrap; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="viz">
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <div id="summary" class="me-auto num">Loading…</div>
+    <label class="form-check-label small"><input type="checkbox" class="form-check-input" id="auto" checked> Refresh every 30 s</label>
+    <button class="btn btn-sm btn-outline-secondary" id="refresh">Refresh</button>
+  </div>
+  <div id="msg" class="small mb-2"></div>
+
+  <!-- Peaks -->
+  <div class="card mb-3">
+    <div class="card-header">Candidate positions: the overall mean and the peaks</div>
+    <div class="card-body">
+      <p class="small text-body-secondary mb-2">
+        The first row is the mean of every fixed epoch: the better choice if the scatter is one smooth
+        distribution rather than separate solutions. Each peak is the fixed epochs within 10 mm of a
+        density maximum, for when a wrong set of integer ambiguities holds steady for a while. Epochs
+        between the peaks are counted in the last row, so the shares add up to 100%. Offsets are from the data set's origin (its first fixed epoch, to the centimetre).
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle num mb-0 text-nowrap">
+          <thead><tr>
+            <th>#</th><th>E / N / U (mm)</th><th>Epochs</th><th>Share</th>
+            <th>SD E / N / U (mm)</th><th>First – last seen (UTC)</th><th></th>
+          </tr></thead>
+          <tbody id="peaks"><tr><td colspan="7">—</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Histograms -->
+  <div class="card mb-3">
+    <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+      <span class="me-auto">Histograms of fixed epochs</span>
+      <label class="small">E/N buckets
+        <select id="bucket-h" class="form-select form-select-sm d-inline-block w-auto">
+          <option value="1">1 mm</option><option value="2" selected>2 mm</option><option value="5">5 mm</option><option value="10">10 mm</option>
+        </select>
+      </label>
+      <label class="small">U buckets
+        <select id="bucket-v" class="form-select form-select-sm d-inline-block w-auto">
+          <option value="1">1 mm</option><option value="2">2 mm</option><option value="5" selected>5 mm</option><option value="10">10 mm</option>
+        </select>
+      </label>
+      <label class="small">Range
+        <select id="range" class="form-select form-select-sm d-inline-block w-auto">
+          <option value="auto">Auto</option><option value="0.05">±5 cm</option><option value="0.1">±10 cm</option>
+          <option value="0.3">±30 cm</option><option value="1">±1 m</option><option value="3">±3 m</option>
+        </select>
+      </label>
+      <label class="form-check-label small"><input type="checkbox" class="form-check-input" id="log"> Log scale</label>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12 col-lg-4"><div class="panel-title">East <span class="unit"></span></div><canvas id="hist-0"></canvas></div>
+        <div class="col-12 col-lg-4"><div class="panel-title">North <span class="unit"></span></div><canvas id="hist-1"></canvas></div>
+        <div class="col-12 col-lg-4"><div class="panel-title">Up <span class="unit"></span></div><canvas id="hist-2"></canvas></div>
+      </div>
+      <div class="small text-body-secondary mt-2">Dashed lines mark the overall mean (M) and the peaks, numbered as in the table. The range applies to the time series too.</div>
+    </div>
+  </div>
+
+  <!-- Time series -->
+  <div class="card mb-3">
+    <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+      <span class="me-auto">Fixed epochs over time</span>
+      <span class="small text-body-secondary num" id="series-res"></span>
+      <button class="btn btn-sm btn-outline-secondary" id="zoom-out" hidden>Show all</button>
+    </div>
+    <div class="card-body">
+      <div class="panel-title">East <span class="unit"></span></div><canvas id="ts-0"></canvas>
+      <div class="panel-title mt-2">North <span class="unit"></span></div><canvas id="ts-1"></canvas>
+      <div class="panel-title mt-2">Up <span class="unit"></span></div><canvas id="ts-2"></canvas>
+      <div class="small text-body-secondary mt-2">
+        Line: mean of each time bin; shading: its min–max, so a bin containing a jump shows both levels.
+        Drag across a panel to zoom in (full 1 s resolution once the range is short enough).
+      </div>
+    </div>
+  </div>
+</div>
+<div class="viz-tip" id="tip" hidden></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $ = id => document.getElementById(id);
+const AXES = ["East", "North", "Up"];
+const RANGES = [0.05, 0.1, 0.3, 1, 3];
+let data = null;        // last /api/locate/analysis
+let series = null;      // the series being shown (whole data set or a zoom)
+let zoom = null;        // [from, to] unix s, or null for everything
+const armed = {};       // peak id -> timeout, for the two-step "Use"
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c])); }
+function mm(m, dp = 1) { return m === null || m === undefined ? "—" : (m * 1000).toFixed(dp); }
+function duration(s) {
+  s = Math.round(s);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+function utc(t, withDate = true) {
+  const iso = new Date(t * 1000).toISOString();
+  return withDate ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso.slice(11, 16);
+}
+function shortUtc(t) { const iso = new Date(t * 1000).toISOString(); return `${iso.slice(5, 10)} ${iso.slice(11, 16)}`; }
+function css(name) { return getComputedStyle(document.querySelector(".viz")).getPropertyValue(name).trim(); }
+
+// ---- data ----
+
+async function load() {
+  try {
+    data = await (await fetch("/api/locate/analysis")).json();
+  } catch (e) {
+    $("msg").textContent = "Couldn't reach the base service.";
+    return;
+  }
+  if (!zoom) series = data.series;
+  else series = await fetchSeries(zoom);
+  render();
+}
+
+async function fetchSeries([from, to]) {
+  return (await fetch(`/api/locate/series?from=${Math.floor(from)}&to=${Math.ceil(to)}`)).json();
+}
+
+// Smallest preset range holding 99.9% of the fixed epochs on every axis, and every peak.
+function autoRange() {
+  const total = data.summary.epochs_fixed;
+  if (!total) return RANGES[0];
+  for (const r of RANGES) {
+    const ok = data.hist.every(h => {
+      const inside = h.reduce((n, [k, c]) => n + ((k * data.hist_bin_m >= -r && (k + 1) * data.hist_bin_m <= r) ? c : 0), 0);
+      return inside >= 0.999 * total;
+    }) && data.peaks.every(p => p.mean_enu_m.every(v => Math.abs(v) < r));
+    if (ok) return r;
+  }
+  return RANGES[RANGES.length - 1];
+}
+function range() { const v = $("range").value; return v === "auto" ? autoRange() : Number(v); }
+
+// ---- summary and peaks ----
+
+function render() {
+  const s = data.summary;
+  $("summary").innerHTML = s.loading ? "Loading the saved data set…" : s.first_t === null ? "No epochs yet - the data set starts with the first epoch in Locate mode." :
+    `Since ${esc(utc(s.first_t))} UTC (${duration(s.elapsed_s)}) · <strong>${s.epochs_fixed}</strong> fixed, ${s.epochs_not_fixed} not fixed` +
+    (s.epochs_fixed + s.epochs_not_fixed ? ` (${(100 * s.epochs_fixed / (s.epochs_fixed + s.epochs_not_fixed)).toFixed(0)}% fixed)` : "");
+  renderPeaks();
+  drawAll();
+}
+
+// Dashed-line markers on the charts: the overall mean (M), then the peaks by number.
+function markers() {
+  return [...(data.overall ? [{p: data.overall, label: "M"}] : []), ...data.peaks.map((p, i) => ({p, label: String(i + 1)}))];
+}
+
+function renderPeaks() {
+  const locate = data.mode === "locate";
+  const rows = data.overall ? [data.overall, ...data.peaks] : [];
+  $("peaks").innerHTML = rows.length ? rows.map((p, i) => {
+    const enough = p.epochs >= data.min_fixed_epochs && p.sd_enu_m.every(v => v !== null);
+    const title = !locate ? "Only in Locate mode" : !enough ? `Needs at least ${data.min_fixed_epochs} epochs` : "";
+    return `<tr class="${i ? "" : "fw-semibold"}">
+      <td title="${i ? "" : "Mean of every fixed epoch - marked M on the charts"}">${i ? i : "All (M)"}</td>
+      <td>${p.mean_enu_m.map(v => mm(v)).join(" / ")}</td>
+      <td>${p.epochs}</td>
+      <td>${(100 * p.epochs / data.overall.epochs).toFixed(1)}%</td>
+      <td>${p.sd_enu_m.map(v => mm(v)).join(" / ")}</td>
+      <td class="small">${esc(shortUtc(p.first_t))} – ${esc(shortUtc(p.last_t))}</td>
+      <td><button class="btn btn-sm btn-primary" data-peak="${esc(p.id)}" ${locate && enough ? "" : "disabled"} title="${esc(title)}">Use this position</button></td>
+    </tr>`;
+  }).join("") + outsidePeaksRow() : `<tr><td colspan="7">No fixed epochs yet.</td></tr>`;
+  document.querySelectorAll("button[data-peak]").forEach(btn => btn.addEventListener("click", () => usePeak(btn)));
+}
+
+// The epochs not within 10 mm of any peak (the peaks don't overlap), so the peak shares total 100%.
+function outsidePeaksRow() {
+  if (!data.peaks.length) return "";
+  const outside = data.overall.epochs - data.peaks.reduce((n, p) => n + p.epochs, 0);
+  return `<tr class="text-body-secondary"><td></td><td>Not in any peak</td><td>${outside}</td>
+    <td>${(100 * outside / data.overall.epochs).toFixed(1)}%</td><td colspan="3"></td></tr>`;
+}
+
+async function usePeak(btn) {
+  const id = btn.dataset.peak;
+  if (!armed[id]) {
+    btn.textContent = "Confirm: save and switch to Base?";
+    btn.classList.replace("btn-primary", "btn-danger");
+    armed[id] = setTimeout(() => { delete armed[id]; btn.textContent = "Use this position"; btn.classList.replace("btn-danger", "btn-primary"); }, 5000);
+    return;
+  }
+  clearTimeout(armed[id]);
+  delete armed[id];
+  const r = await (await fetch("/api/locate/use", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({peak: id})})).json();
+  $("msg").className = "small mb-2 " + (r.ok ? "text-success" : "text-danger");
+  $("msg").textContent = r.ok ? "Saved. Switching to Base - see the Positions page." : r.error;
+  load();
+}
+
+// ---- drawing ----
+
+const M = {l: 46, r: 10, t: 8, b: 22};   // plot margins, px
+
+function setup(canvas, height) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth;
+  canvas.style.height = height + "px";
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = "11px system-ui, sans-serif";
+  return {ctx, w, h: height, pw: w - M.l - M.r, ph: height - M.t - M.b};
+}
+
+function niceStep(span, target) {
+  const raw = span / target, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || 10 * p;
+}
+function lenLabel(m, r) { return r <= 0.1 ? `${Math.round(m * 1000)}` : `${+(m * 100).toFixed(1)}`; }
+function lenUnit(r) { return r <= 0.1 ? "mm" : "cm"; }
+
+function grid(g, color) {
+  g.ctx.strokeStyle = color;
+  g.ctx.lineWidth = 1;
+}
+
+// The server keeps 1 mm buckets; merge them into the size chosen for this axis.
+function buckets(axis) {
+  const fine = data.hist_bin_m, mmPer = Number($(axis === 2 ? "bucket-v" : "bucket-h").value);
+  const merged = new Map();
+  for (const [k, c] of data.hist[axis]) {
+    const b = Math.floor(k / mmPer);
+    merged.set(b, (merged.get(b) || 0) + c);
+  }
+  return {bin: mmPer * fine, list: [...merged.entries()]};
+}
+
+function drawHist(axis) {
+  const canvas = $(`hist-${axis}`), g = setup(canvas, 170), ctx = g.ctx, r = range(), {bin, list} = buckets(axis);
+  const text = css("--bs-secondary-color"), line = css("--bs-border-color"), series = css("--series"), marker = css("--marker");
+  const log = $("log").checked;
+  let below = 0, above = 0, max = 0;
+  const shown = [];
+  for (const [k, c] of list) {
+    const lo = k * bin;
+    if (lo + bin <= -r) below += c; else if (lo >= r) above += c; else { shown.push([lo, c]); max = Math.max(max, c); }
+  }
+  const yv = c => log ? Math.log10(1 + c) : c, ymax = Math.max(yv(max), 1e-9);
+  const X = v => M.l + (v + r) / (2 * r) * g.pw, Y = c => M.t + g.ph - yv(c) / ymax * g.ph;
+  // grid and axes
+  const step = niceStep(2 * r, 6);
+  ctx.fillStyle = text;
+  ctx.textAlign = "center";
+  grid(g, line);
+  for (let v = Math.ceil(-r / step) * step; v <= r + 1e-9; v += step) {
+    ctx.beginPath(); ctx.moveTo(X(v), M.t); ctx.lineTo(X(v), M.t + g.ph); ctx.globalAlpha = .5; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillText(lenLabel(v, r), X(v), g.h - 6);
+  }
+  ctx.textAlign = "right";
+  ctx.fillText(String(max), M.l - 6, M.t + 8);
+  ctx.fillText("0", M.l - 6, M.t + g.ph);
+  ctx.beginPath(); ctx.moveTo(M.l, M.t + g.ph + .5); ctx.lineTo(M.l + g.pw, M.t + g.ph + .5); ctx.stroke();
+  // bars: 2px gap only when there's room for it
+  const bw = g.pw * bin / (2 * r), gap = bw >= 6 ? 2 : 0;
+  ctx.fillStyle = series;
+  canvas._bars = [];
+  for (const [lo, c] of shown) {
+    const x = X(lo) + gap / 2, w = Math.max(bw - gap, 1), y = Y(c), h = M.t + g.ph - y;
+    if (h <= 0) continue;
+    const rad = Math.min(4, w / 2, h);
+    ctx.beginPath();
+    ctx.moveTo(x, M.t + g.ph); ctx.lineTo(x, y + rad); ctx.arcTo(x, y, x + rad, y, rad);
+    ctx.lineTo(x + w - rad, y); ctx.arcTo(x + w, y, x + w, y + rad, rad); ctx.lineTo(x + w, M.t + g.ph);
+    ctx.fill();
+    canvas._bars.push({x0: X(lo), x1: X(lo) + bw, lo, c});
+  }
+  // out of range counts
+  ctx.fillStyle = text;
+  if (below) { ctx.textAlign = "left"; ctx.fillText(`◀ ${below}`, M.l + 2, M.t + 10); }
+  if (above) { ctx.textAlign = "right"; ctx.fillText(`${above} ▶`, M.l + g.pw - 2, M.t + 10); }
+  // peak markers
+  ctx.strokeStyle = marker; ctx.fillStyle = marker; ctx.setLineDash([3, 3]); ctx.textAlign = "center";
+  const used = [];
+  markers().forEach(({p, label}) => {
+    const v = p.mean_enu_m[axis];
+    if (Math.abs(v) >= r) return;
+    ctx.beginPath(); ctx.moveTo(X(v), M.t + 12); ctx.lineTo(X(v), M.t + g.ph); ctx.stroke();
+    if (used.every(x => Math.abs(x - X(v)) > 9)) { ctx.fillText(label, X(v), M.t + 10); used.push(X(v)); }
+  });
+  ctx.setLineDash([]);
+  canvas._hover = ex => {
+    const b = canvas._bars.find(b => ex >= b.x0 && ex < b.x1);
+    return b ? `${AXES[axis]} ${mm(b.lo, 0)} to ${mm(b.lo + bin, 0)} mm: ${b.c} epochs` : null;
+  };
+}
+
+function drawSeries(axis) {
+  const canvas = $(`ts-${axis}`), g = setup(canvas, 150), ctx = g.ctx, r = range();
+  const text = css("--bs-secondary-color"), line = css("--bs-border-color"), color = css("--series"), band = css("--band"), marker = css("--marker");
+  const pts = series ? series.points : [];
+  canvas._pts = pts;
+  if (!pts.length) {
+    ctx.fillStyle = text; ctx.textAlign = "center"; ctx.fillText("No fixed epochs in this range", g.w / 2, g.h / 2);
+    canvas._scale = null;
+    return;
+  }
+  const width = series.width_s;
+  const t0 = zoom ? zoom[0] : pts[0].t, t1 = zoom ? zoom[1] : pts[pts.length - 1].t + width;
+  const X = t => M.l + (t - t0) / Math.max(t1 - t0, 1) * g.pw;
+  const Y = v => M.t + g.ph / 2 - Math.max(-r, Math.min(r, v)) / r * (g.ph / 2);
+  canvas._scale = {t0, t1, X};
+  // horizontal grid
+  ctx.fillStyle = text; ctx.textAlign = "right"; grid(g, line);
+  const vstep = niceStep(2 * r, 4);
+  for (let v = Math.ceil(-r / vstep) * vstep; v <= r + 1e-9; v += vstep) {
+    ctx.beginPath(); ctx.moveTo(M.l, Y(v)); ctx.lineTo(M.l + g.pw, Y(v)); ctx.globalAlpha = Math.abs(v) < 1e-9 ? 1 : .5; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillText(lenLabel(v, r), M.l - 6, Y(v) + 4);
+  }
+  // time ticks
+  const span = t1 - t0;
+  const tstep = [60, 300, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800].find(s => span / s <= 7) || 604800;
+  ctx.textAlign = "center";
+  for (let t = Math.ceil(t0 / tstep) * tstep; t <= t1; t += tstep) {
+    ctx.beginPath(); ctx.moveTo(X(t), M.t); ctx.lineTo(X(t), M.t + g.ph); ctx.globalAlpha = .5; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillText(tstep >= 86400 || t % 86400 === 0 ? new Date(t * 1000).toISOString().slice(5, 10) : utc(t, false), X(t), g.h - 6);
+  }
+  // runs of contiguous bins (a gap means no fixed epochs)
+  const runs = [];
+  let run = [];
+  pts.forEach((p, i) => {
+    if (i && p.t - pts[i - 1].t > 1.5 * width) { runs.push(run); run = []; }
+    run.push(p);
+  });
+  runs.push(run);
+  const half = width / 2;
+  for (const rn of runs) {
+    ctx.fillStyle = band;
+    ctx.beginPath();
+    rn.forEach((p, i) => i ? ctx.lineTo(X(p.t + half), Y(p.max[axis])) : ctx.moveTo(X(p.t + half), Y(p.max[axis])));
+    for (let i = rn.length - 1; i >= 0; i--) ctx.lineTo(X(rn[i].t + half), Y(rn[i].min[axis]));
+    ctx.closePath();
+    if (rn.length === 1) { const p = rn[0]; ctx.fillRect(X(p.t), Y(p.max[axis]), Math.max(X(p.t + width) - X(p.t), 1), Y(p.min[axis]) - Y(p.max[axis])); }
+    else ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+    ctx.beginPath();
+    rn.forEach((p, i) => i ? ctx.lineTo(X(p.t + half), Y(p.mean[axis])) : ctx.moveTo(X(p.t + half), Y(p.mean[axis])));
+    if (rn.length === 1) ctx.lineTo(X(rn[0].t + half) + 1, Y(rn[0].mean[axis]));
+    ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+  // peak levels
+  ctx.strokeStyle = marker; ctx.fillStyle = marker; ctx.setLineDash([3, 3]); ctx.textAlign = "left";
+  const used = [];
+  markers().forEach(({p, label}) => {
+    const v = p.mean_enu_m[axis];
+    if (Math.abs(v) >= r) return;
+    ctx.beginPath(); ctx.moveTo(M.l, Y(v)); ctx.lineTo(M.l + g.pw, Y(v)); ctx.globalAlpha = .45; ctx.stroke(); ctx.globalAlpha = 1;
+    if (used.every(y => Math.abs(y - Y(v)) > 9)) { ctx.fillText(label, M.l + g.pw + 2, Y(v) + 4); used.push(Y(v)); }
+  });
+  ctx.setLineDash([]);
+  // drag selection
+  if (canvas._drag) {
+    const [a, b] = canvas._drag;
+    ctx.fillStyle = band; ctx.fillRect(Math.min(a, b), M.t, Math.abs(b - a), g.ph);
+  }
+  canvas._hover = ex => {
+    if (ex < M.l || ex > M.l + g.pw) return null;
+    const t = t0 + (ex - M.l) / g.pw * (t1 - t0);
+    let best = null;
+    for (const p of pts) if (!best || Math.abs(p.t + half - t) < Math.abs(best.t + half - t)) best = p;
+    if (!best || Math.abs(best.t + half - t) > width * 2) return null;
+    return `${utc(best.t)}${width > 1 ? ` +${duration(width)}` : ""} UTC · ${AXES[axis]} mean ${mm(best.mean[axis])} mm` +
+      (best.n > 1 ? ` (min ${mm(best.min[axis])}, max ${mm(best.max[axis])}, ${best.n} epochs)` : "");
+  };
+}
+
+function drawAll() {
+  if (!data) return;
+  [0, 1, 2].forEach(drawHist);
+  [0, 1, 2].forEach(drawSeries);
+  document.querySelectorAll(".viz .unit").forEach(el => el.textContent = `(${lenUnit(range())})`);
+  $("zoom-out").hidden = !zoom;
+  $("series-res").textContent = series && series.points.length ? `bins of ${duration(series.width_s)}` : "";
+}
+
+// ---- interaction ----
+
+const tip = $("tip");
+document.querySelectorAll(".viz canvas").forEach(canvas => {
+  canvas.addEventListener("pointermove", ev => {
+    const rect = canvas.getBoundingClientRect(), ex = ev.clientX - rect.left;
+    if (canvas._drag) { canvas._drag[1] = ex; drawSeries(Number(canvas.id.slice(3))); }
+    const text = canvas._hover && canvas._hover(ex);
+    tip.hidden = !text;
+    if (text) {
+      tip.textContent = text;
+      const x = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+      tip.style.left = x + "px";
+      tip.style.top = (ev.clientY + 14) + "px";
+    }
+  });
+  canvas.addEventListener("pointerleave", () => { tip.hidden = true; });
+});
+document.querySelectorAll("canvas[id^=ts-]").forEach(canvas => {
+  canvas.addEventListener("pointerdown", ev => {
+    if (!canvas._scale) return;
+    const ex = ev.clientX - canvas.getBoundingClientRect().left;
+    canvas._drag = [ex, ex];
+    canvas.setPointerCapture(ev.pointerId);
+  });
+  canvas.addEventListener("pointerup", async () => {
+    const drag = canvas._drag;
+    canvas._drag = null;
+    if (!drag || Math.abs(drag[1] - drag[0]) < 6) { drawSeries(Number(canvas.id.slice(3))); return; }
+    const {t0, t1} = canvas._scale, pw = canvas.clientWidth - M.l - M.r;
+    const T = x => t0 + Math.max(0, Math.min(1, (x - M.l) / pw)) * (t1 - t0);
+    const from = T(Math.min(...drag)), to = T(Math.max(...drag));
+    if (to - from < 20) { drawAll(); return; }
+    zoom = [from, to];
+    series = await fetchSeries(zoom);
+    drawAll();
+  });
+});
+$("zoom-out").addEventListener("click", () => { zoom = null; series = data.series; drawAll(); });
+$("range").addEventListener("change", drawAll);
+$("log").addEventListener("change", drawAll);
+$("bucket-h").addEventListener("change", drawAll);
+$("bucket-v").addEventListener("change", drawAll);
+$("refresh").addEventListener("click", load);
+window.addEventListener("resize", drawAll);
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(drawAll, 0));
+setInterval(() => { if ($("auto").checked) load(); }, 30000);
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block navlinks %}
+<div class="nav-item dropdown">
+  <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+    Manager
+  </a>
+  <ul class="dropdown-menu dropdown-menu-dark">
+    <li><a class="dropdown-item {{ 'active' if current_slug == 'home' else '' }}" href="/">Home</a></li>
+    <li><a class="dropdown-item {{ 'active' if current_slug == 'services' else '' }}" href="/services">Services</a></li>
+    <li><a class="dropdown-item {{ 'active' if current_slug == 'config' else '' }}" href="/config">Config</a></li>
+  </ul>
+</div>
+{% endblock %}

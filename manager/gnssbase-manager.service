@@ -1,0 +1,12 @@
+[Unit]
+Description=GnssBase manager
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/GnssBase
+ExecStart=/home/pi/GnssBase/venv/bin/python3 manager/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

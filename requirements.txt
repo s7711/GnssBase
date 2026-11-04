@@ -1,0 +1,7 @@
+# All pure Python - fine on the Zero W's armv6. Keep this short: 426 MB of RAM.
+flask
+flask-sock
+pyyaml
+pyserial
+pyubx2   # UBX parsing and CFG-VALSET/VALGET building (pulls in pyrtcm, pynmeagps)
+pytest

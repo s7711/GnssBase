@@ -1,0 +1,6 @@
+# Scoped sudoers rule so the manager can control gnssbase-* units and
+# shut the Pi down (the Services page's power-off button). Not needed on
+# GnssBase itself while pi has passwordless sudo for everything
+# (/etc/sudoers.d/010_pi-nopasswd), but kept for a Pi without that.
+# Install as /etc/sudoers.d/gnssbase-manager (via `visudo -f`).
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl start gnssbase-*, /usr/bin/systemctl stop gnssbase-*, /usr/bin/systemctl restart gnssbase-*, /usr/sbin/shutdown -h now

@@ -1,0 +1,73 @@
+{% extends "manager-base.html" %}
+{% block title %}GnssBase Manager — Services{% endblock %}
+{% block content %}
+<table class="table align-middle">
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Unit</th>
+      <th>Status</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-service="{{ row.name }}">
+      <td>{{ row.name }}</td>
+      <td><code>{{ row.unit }}</code></td>
+      <td>
+        <span class="badge status-badge
+          {{ 'text-bg-success' if row.status == 'running'
+             else 'text-bg-danger' if row.status == 'failed'
+             else 'text-bg-secondary' }}">{{ row.status }}</span>
+      </td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary" data-action="start">Start</button>
+        <button class="btn btn-sm btn-outline-warning" data-action="restart">Restart</button>
+        <button class="btn btn-sm btn-outline-danger" data-action="stop">Stop</button>
+        <a class="btn btn-sm btn-outline-secondary" href="/services/{{ row.name }}/journal">Journal</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<hr>
+<p>
+  <button id="power-off-btn" class="btn btn-danger">Power off</button>
+  <span class="text-body-secondary small">Cleanly shuts down the Pi so the power can be pulled. To start again, turn the power off and on.</span>
+</p>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll("button[data-action]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const row = btn.closest("tr");
+    const name = row.dataset.service;
+    fetch(`/services/${name}/${btn.dataset.action}`, {method: "POST"});
+  });
+});
+
+document.getElementById("power-off-btn").addEventListener("click", () => {
+  if (!confirm("Power off GnssBase now? The base stops sending corrections until the power is cycled.")) return;
+  fetch("/power-off", {method: "POST"});
+});
+
+const proto = location.protocol === "https:" ? "wss" : "ws";
+const ws = new WebSocket(`${proto}://${location.host}/ws/status`);
+ws.onmessage = (event) => {
+  const statuses = JSON.parse(event.data);
+  document.querySelectorAll("tr[data-service]").forEach(row => {
+    const status = statuses[row.dataset.service];
+    if (!status) return;
+    const badge = row.querySelector(".status-badge");
+    badge.textContent = status;
+    badge.className = "badge status-badge " + (
+      status === "running" ? "text-bg-success"
+      : status === "failed" ? "text-bg-danger"
+      : "text-bg-secondary"
+    );
+  });
+};
+</script>
+{% endblock %}
